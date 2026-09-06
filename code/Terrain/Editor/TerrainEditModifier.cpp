@@ -443,16 +443,6 @@ bool TerrainEditModifier::activate()
 		m_terrainComponent->m_terrain->m_cutMap = resource::Proxy< render::ITexture >(m_cutMap);
 	}
 
-	// Create material mask texture data.
-	m_attributeData.reset(new uint8_t [size * size]);
-	for (int32_t v = 0; v < size; ++v)
-	{
-		for (int32_t u = 0; u < size; ++u)
-		{
-			m_attributeData[u + v * size] = m_heightfield->getGridAttribute(u, v);
-		}
-	}
-
 	// Create default brush; try set same brush type as before.
 	if (m_brush)
 		setBrush(type_of(m_brush));
@@ -969,19 +959,6 @@ void TerrainEditModifier::apply(const Vector4& center)
 			// Replace cut map in resource with our texture.
 			m_terrainComponent->m_terrain->m_cutMap = resource::Proxy< render::ITexture >(m_cutMap);
 		}));
-	}
-
-	// Update material mask.
-	if ((m_brushMode & IBrush::MdAttribute) != 0)
-	{
-		hf::Heightfield* hf = m_heightfield;
-		for (int32_t v = mnz; v <= mxz; ++v)
-		{
-			for (int32_t u = mnx; u <= mxx; ++u)
-			{
-				m_attributeData[u + v * size] = hf->getGridAttribute(u, v);
-			}
-		}
 	}
 
 	// Wait until all transfers has finished.

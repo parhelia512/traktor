@@ -9,6 +9,7 @@
 #include "Terrain/Editor/AttributeBrush.h"
 
 #include "Core/Math/Const.h"
+#include "Core/Math/MathUtils.h"
 #include "Heightfield/Heightfield.h"
 #include "Terrain/Editor/IFallOff.h"
 
@@ -30,13 +31,16 @@ uint32_t AttributeBrush::begin(float x, float y, const State& state)
 {
 	m_radius = state.radius;
 	m_fallOff = state.falloff;
-	m_strength = powf(abs(state.strength), 2.0f);
-	m_attribute = state.attribute;
+	m_strength = state.strength;
+	m_attribute = (uint8_t)state.attribute;
 	return MdAttribute;
 }
 
 void AttributeBrush::apply(float x, float y)
 {
+	const int32_t gx = (int32_t)x;
+	const int32_t gz = (int32_t)y;
+
 	for (int32_t iy = -m_radius; iy <= m_radius; ++iy)
 	{
 		for (int32_t ix = -m_radius; ix <= m_radius; ++ix)
@@ -44,11 +48,19 @@ void AttributeBrush::apply(float x, float y)
 			const float fx = float(ix) / m_radius;
 			const float fy = float(iy) / m_radius;
 
+			// Strength is the peak density of the stroke, the falloff it's profile.
 			const float a = m_fallOff->evaluate(fx, fy) * m_strength;
 			if (abs(a) <= FUZZY_EPSILON)
 				continue;
 
-			m_heightfield->setGridAttribute(x + ix, y + iy, m_attribute);
+			const float density = m_heightfield->getGridAttributeDensity(gx + ix, gz + iy, m_attribute) / 255.0f;
+
+			// Approach the profile rather than accumulate onto it, thus a stroke lay
+			// down the shape of the falloff instead of saturating where it overlap
+			// itself. An inverted stroke carve the density back down the same way.
+			const float target = (a >= 0.0f) ? max(density, a) : min(density, 1.0f + a);
+
+			m_heightfield->setGridAttribute(gx + ix, gz + iy, m_attribute, (uint8_t)(clamp(target, 0.0f, 1.0f) * 255.0f + 0.5f));
 		}
 	}
 }

@@ -8,6 +8,7 @@
  */
 #include "Core/Misc/String.h"
 #include "Drawing/Image.h"
+#include "Heightfield/Heightfield.h"
 #include "I18N/Text.h"
 #include "Scene/Editor/SceneEditorContext.h"
 #include "Scene/Editor/Events/ModifierChangedEvent.h"
@@ -93,11 +94,11 @@ bool TerrainSceneEditorUIExtension::create(ui::Widget* parent, ui::ToolBar* tool
 	m_toolMaterial->add(L"4");
 	m_toolMaterial->select(0);
 
+	// Labeled by attribute index since that's what the layer components reference,
+	// unlike materials which are selected by ordinal.
 	m_toolAttribute = new ui::ToolBarDropDown(ui::Command(L"Terrain.Editor.SelectAttribute"), 80_ut, i18n::Text(L"TERRAIN_EDITOR_ATTRIBUTE"));
-	m_toolAttribute->add(L"1");
-	m_toolAttribute->add(L"2");
-	m_toolAttribute->add(L"3");
-	m_toolAttribute->add(L"4");
+	for (int32_t i = 0; i < hf::Heightfield::MaxAttributes; ++i)
+		m_toolAttribute->add(toString(i));
 	m_toolAttribute->select(0);
 
 	m_toolVisualize = new ui::ToolBarDropDown(ui::Command(L"Terrain.Editor.SelectVisualize"), 100_ut, i18n::Text(L"TERRAIN_EDITOR_VISUALIZE"));

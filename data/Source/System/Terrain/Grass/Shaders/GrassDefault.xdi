@@ -59,7 +59,7 @@
 				<first>-149</first>
 				<second>-89</second>
 			</position>
-			<color>0.176471, 0.243137, 0.133333, 1</color>
+			<color>0.388235, 0.388235, 0.2, 1</color>
 			<linear>true</linear>
 		</item>
 		<item type="traktor.render.Scalar" version="traktor.render.Node:1">

@@ -32,6 +32,12 @@ class T_DLLCLASS Heightfield : public Object
 	T_RTTI_CLASS;
 
 public:
+	enum
+	{
+		//! Number of individual attribute layers.
+		MaxAttributes = 16
+	};
+
 	explicit Heightfield(
 		int32_t size,
 		const Vector4& worldExtent);
@@ -40,7 +46,12 @@ public:
 
 	void setGridCut(int32_t gridX, int32_t gridZ, bool cut);
 
-	void setGridAttribute(int32_t gridX, int32_t gridZ, uint8_t attribute);
+	/*! Set density of a single attribute in a grid cell.
+	 *
+	 * Attributes are independent layers; setting one leave the others untouched.
+	 * The layer is allocated on first use.
+	 */
+	void setGridAttribute(int32_t gridX, int32_t gridZ, uint8_t attribute, uint8_t density);
 
 	float getGridHeightNearest(int32_t gridX, int32_t gridZ) const;
 
@@ -54,9 +65,11 @@ public:
 
 	bool getWorldCut(float worldX, float worldZ) const;
 
-	uint8_t getGridAttribute(int32_t gridX, int32_t gridZ) const;
+	//! Density of a single attribute in a grid cell, 0 to 255.
+	uint8_t getGridAttributeDensity(int32_t gridX, int32_t gridZ, uint8_t attribute) const;
 
-	uint8_t getWorldAttribute(float worldX, float worldZ) const;
+	//! Bilinear filtered density of a single attribute at a world position, 0 to 1.
+	float getWorldAttributeDensity(float worldX, float worldZ, uint8_t attribute) const;
 
 	void gridToWorld(int32_t gridX, int32_t gridZ, float& outWorldX, float& outWorldZ) const;
 
@@ -88,9 +101,14 @@ public:
 
 	const uint8_t* getCuts() const { return m_cuts.c_ptr(); }
 
-	uint8_t* getAttributes() { return m_attributes.ptr(); }
+	//! Allocate, and clear, an attribute layer unless it already exist.
+	uint8_t* createAttributes(uint8_t attribute);
 
-	const uint8_t* getAttributes() const { return m_attributes.c_ptr(); }
+	//! Raw attribute layer; null when the layer has never been written.
+	const uint8_t* getAttributes(uint8_t attribute) const;
+
+	//! True if the attribute layer exist and contain any density.
+	bool haveAttribute(uint8_t attribute) const;
 
 	int32_t gridToCell(int32_t grid) const;
 
@@ -107,7 +125,7 @@ private:
 	float m_worldExtentFloats[4];
 	AutoArrayPtr< height_t > m_heights;
 	AutoArrayPtr< uint8_t > m_cuts;
-	AutoArrayPtr< uint8_t > m_attributes;
+	AutoArrayPtr< uint8_t > m_attributes[MaxAttributes];
 	AutoArrayPtr< Aabb3 > m_cellBounds;
 };
 

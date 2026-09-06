@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <limits>
 
 namespace traktor::hf
@@ -36,9 +37,9 @@ Heightfield::Heightfield(
 
 	m_heights.reset(new height_t[m_size * m_size]);
 	m_cuts.reset(new uint8_t[(m_size * m_size) / 8]);
-	m_attributes.reset(new uint8_t[m_size * m_size]);
 	m_cellBounds.reset(new Aabb3[m_cellBoundsPitch * m_cellBoundsPitch]);
 
+	// Attribute layers are allocated on demand; a terrain rarely use more than a few.
 	m_worldExtent.storeUnaligned(m_worldExtentFloats);
 }
 
@@ -65,15 +66,26 @@ void Heightfield::setGridCut(int32_t gridX, int32_t gridZ, bool cut)
 		m_cuts[offset / 8] &= ~(1 << (offset & 7));
 }
 
-void Heightfield::setGridAttribute(int32_t gridX, int32_t gridZ, uint8_t attribute)
+void Heightfield::setGridAttribute(int32_t gridX, int32_t gridZ, uint8_t attribute, uint8_t density)
 {
 	if (gridX < 0 || gridX >= (int32_t)m_size)
 		return;
 	if (gridZ < 0 || gridZ >= (int32_t)m_size)
 		return;
+	if (attribute >= MaxAttributes)
+		return;
+
+	uint8_t* attributes = m_attributes[attribute].ptr();
+	if (attributes == nullptr)
+	{
+		// Don't allocate a layer just to store the default density.
+		if (density == 0)
+			return;
+		attributes = createAttributes(attribute);
+	}
 
 	const int32_t offset = gridX + gridZ * m_size;
-	m_attributes[offset] = attribute;
+	attributes[offset] = density;
 }
 
 float Heightfield::getGridHeightNearest(int32_t gridX, int32_t gridZ) const
@@ -201,8 +213,15 @@ bool Heightfield::getWorldCut(float worldX, float worldZ) const
 	return getGridCut(gridX, gridZ);
 }
 
-uint8_t Heightfield::getGridAttribute(int32_t gridX, int32_t gridZ) const
+uint8_t Heightfield::getGridAttributeDensity(int32_t gridX, int32_t gridZ, uint8_t attribute) const
 {
+	if (attribute >= MaxAttributes)
+		return 0;
+
+	const uint8_t* attributes = m_attributes[attribute].c_ptr();
+	if (attributes == nullptr)
+		return 0;
+
 	if (gridX < 0)
 		gridX = 0;
 	else if (gridX >= (int32_t)m_size)
@@ -214,14 +233,70 @@ uint8_t Heightfield::getGridAttribute(int32_t gridX, int32_t gridZ) const
 		gridZ = (int32_t)m_size - 1;
 
 	const int32_t offset = gridX + gridZ * m_size;
-	return m_attributes[offset];
+	return attributes[offset];
 }
 
-uint8_t Heightfield::getWorldAttribute(float worldX, float worldZ) const
+float Heightfield::getWorldAttributeDensity(float worldX, float worldZ, uint8_t attribute) const
 {
-	int32_t gridX, gridZ;
+	if (attribute >= MaxAttributes || m_attributes[attribute].c_ptr() == nullptr)
+		return 0.0f;
+
+	float gridX, gridZ;
 	worldToGrid(worldX, worldZ, gridX, gridZ);
-	return getGridAttribute(gridX, gridZ);
+
+	// Densities are defined at cell centers.
+	gridX -= 0.5f;
+	gridZ -= 0.5f;
+
+	const int32_t ix = (int32_t)std::floor(gridX);
+	const int32_t iz = (int32_t)std::floor(gridZ);
+	const float fx = gridX - (float)ix;
+	const float fz = gridZ - (float)iz;
+
+	const float d00 = getGridAttributeDensity(ix, iz, attribute);
+	const float d10 = getGridAttributeDensity(ix + 1, iz, attribute);
+	const float d01 = getGridAttributeDensity(ix, iz + 1, attribute);
+	const float d11 = getGridAttributeDensity(ix + 1, iz + 1, attribute);
+
+	return (
+		(d00 * (1.0f - fx) + d10 * fx) * (1.0f - fz) +
+		(d01 * (1.0f - fx) + d11 * fx) * fz
+	) / 255.0f;
+}
+
+uint8_t* Heightfield::createAttributes(uint8_t attribute)
+{
+	if (attribute >= MaxAttributes)
+		return nullptr;
+
+	if (m_attributes[attribute].c_ptr() == nullptr)
+	{
+		m_attributes[attribute].reset(new uint8_t[m_size * m_size]);
+		std::memset(m_attributes[attribute].ptr(), 0, m_size * m_size);
+	}
+
+	return m_attributes[attribute].ptr();
+}
+
+const uint8_t* Heightfield::getAttributes(uint8_t attribute) const
+{
+	return (attribute < MaxAttributes) ? m_attributes[attribute].c_ptr() : nullptr;
+}
+
+bool Heightfield::haveAttribute(uint8_t attribute) const
+{
+	const uint8_t* attributes = getAttributes(attribute);
+	if (attributes == nullptr)
+		return false;
+
+	// A layer which has been fully erased is no different from one never written.
+	for (int32_t i = 0; i < m_size * m_size; ++i)
+	{
+		if (attributes[i] != 0)
+			return true;
+	}
+
+	return false;
 }
 
 void Heightfield::gridToWorld(int32_t gridX, int32_t gridZ, float& outWorldX, float& outWorldZ) const

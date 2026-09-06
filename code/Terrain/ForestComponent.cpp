@@ -273,8 +273,9 @@ void ForestComponent::updatePatches()
 	{
 		for (float x = 0; x < size; x += densityInv)
 		{
-			// Check if trees are allowed on this position.
-			if (heightfield->getGridAttribute(x, z) != m_data.m_attribute)
+			// Trees are scattered proportional to the painted attribute density.
+			const uint8_t density = heightfield->getGridAttributeDensity((int32_t)x, (int32_t)z, m_data.m_attribute);
+			if (random.nextFloat() * 255.0f >= density)
 				continue;
 
 			// Get world position.

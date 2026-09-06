@@ -74,7 +74,7 @@ private:
 	struct Cluster
 	{
 		Vector4 center;
-		float scale;
+		int32_t grass;	//!< Index of grass type in layer data.
 		int32_t from;
 		int32_t to;
 	};

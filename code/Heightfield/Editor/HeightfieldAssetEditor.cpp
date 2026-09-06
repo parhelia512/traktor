@@ -6,6 +6,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
+#include "Core/Containers/StaticVector.h"
 #include "Core/Io/FileSystem.h"
 #include "Core/Io/IStream.h"
 #include "Core/Log/Log.h"
@@ -40,6 +41,18 @@ namespace traktor::hf
 {
 	namespace
 	{
+
+//! Attribute layers which carry any data, thus only those need to be carried across.
+StaticVector< uint8_t, Heightfield::MaxAttributes > usedAttributes(const Heightfield* heightfield)
+{
+	StaticVector< uint8_t, Heightfield::MaxAttributes > attributes;
+	for (uint8_t i = 0; i < Heightfield::MaxAttributes; ++i)
+	{
+		if (heightfield->getAttributes(i) != nullptr)
+			attributes.push_back(i);
+	}
+	return attributes;
+}
 
 Ref< drawing::Image > generatePreviewImage(const Heightfield* hf)
 {
@@ -283,6 +296,8 @@ bool HeightfieldAssetEditor::handleCommand(const ui::Command& command)
 			m_heightfield->getWorldExtent()
 		);
 
+		const auto attributes = usedAttributes(m_heightfield);
+
 		for (int32_t iy = 0; iy < size; ++iy)
 		{
 			for (int32_t ix = 0; ix < size; ++ix)
@@ -298,6 +313,9 @@ bool HeightfieldAssetEditor::handleCommand(const ui::Command& command)
 
 				resized->setGridHeight(ix, iy, h);
 				resized->setGridCut(ix, iy, c);
+
+				for (uint8_t a : attributes)
+					resized->setGridAttribute(ix, iy, a, m_heightfield->getGridAttributeDensity((int32_t)sx, (int32_t)sy, a));
 			}
 		}
 
@@ -350,6 +368,8 @@ bool HeightfieldAssetEditor::handleCommand(const ui::Command& command)
 			m_heightfield->getWorldExtent()
 		);
 
+		const auto attributes = usedAttributes(m_heightfield);
+
 		for (int32_t iy = 0; iy < size; ++iy)
 		{
 			for (int32_t ix = 0; ix < size; ++ix)
@@ -365,6 +385,9 @@ bool HeightfieldAssetEditor::handleCommand(const ui::Command& command)
 
 				cropped->setGridHeight(ix, iy, h);
 				cropped->setGridCut(ix, iy, c);
+
+				for (uint8_t a : attributes)
+					cropped->setGridAttribute(ix, iy, a, m_heightfield->getGridAttributeDensity(sx, sy, a));
 			}
 		}
 
@@ -389,6 +412,8 @@ bool HeightfieldAssetEditor::handleCommand(const ui::Command& command)
 			newWorldExtent
 		);
 
+		const auto attributes = usedAttributes(m_heightfield);
+
 		for (int32_t iy = 0; iy < size; ++iy)
 		{
 			for (int32_t ix = 0; ix < size; ++ix)
@@ -398,6 +423,9 @@ bool HeightfieldAssetEditor::handleCommand(const ui::Command& command)
 
 				cropped->setGridHeight(ix, iy, cropped->worldToUnit(h));
 				cropped->setGridCut(ix, iy, c);
+
+				for (uint8_t a : attributes)
+					cropped->setGridAttribute(ix, iy, a, m_heightfield->getGridAttributeDensity(ix, iy, a));
 			}
 		}
 

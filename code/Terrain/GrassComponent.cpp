@@ -8,7 +8,6 @@
  */
 #include "Terrain/GrassComponent.h"
 
-#include "Core/Containers/StaticVector.h"
 #include "Core/Log/Log.h"
 #include "Core/Math/Const.h"
 #include "Core/Math/Half.h"
@@ -42,6 +41,9 @@ namespace
 const int32_t c_bladeSegments = 4;
 const int32_t c_bladeVertexCount = 2 * c_bladeSegments + 1;
 const int32_t c_bladeTriangleCount = 2 * ((c_bladeSegments - 1) * 2 + 1); // Both windings.
+
+//! Number of heightfield grid cells spanned by a cluster of blades, in each direction.
+const int32_t c_clusterGridSize = 16;
 
 #pragma pack(1)
 
@@ -86,6 +88,90 @@ Vertex packVertex(float x, float y, float u, float v)
 	vtx.texCoord[0] = floatToHalf(u);
 	vtx.texCoord[1] = floatToHalf(v);
 	return vtx;
+}
+
+//! True if an attribute carry any density within a grid rectangle.
+bool anyAttributeDensity(const hf::Heightfield* heightfield, int32_t gridX, int32_t gridZ, int32_t gridSize, uint8_t attribute)
+{
+	for (int32_t z = 0; z < gridSize; ++z)
+	{
+		for (int32_t x = 0; x < gridSize; ++x)
+		{
+			if (heightfield->getGridAttributeDensity(gridX + x, gridZ + z, attribute) != 0)
+				return true;
+		}
+	}
+	return false;
+}
+
+/*! Scatter blades of a single grass type across a cluster.
+ *
+ * Each candidate is accepted with a probability equal to the painted attribute density
+ * at it's own position, thus both the number and the size of the blades follow the
+ * density at grid cell resolution instead of being constant across the entire cluster.
+ *
+ * Deterministic in the cluster center and the heightfield alone; it's called once to
+ * count the accepted blades and later once more to write them. Should the heightfield
+ * have been repainted in between the passes disagree, thus writing is capped.
+ *
+ * \return Number of accepted blades, of which the first \a maxBlades are written to
+ * \a outBlades when given.
+ */
+int32_t scatterCluster(
+	const hf::Heightfield* heightfield,
+	const Vector4& center,
+	float clusterSize,
+	uint8_t attribute,
+	int32_t candidateCount,
+	float scale,
+	BladeData* outBlades,
+	int32_t maxBlades)
+{
+	RandomGeometry random(int32_t(center.x() * 919.0f + center.z() * 463.0f));
+
+	// A single shift for the entire set decorrelate it from neighbouring clusters
+	// without disturbing the stratification within it.
+	const Vector2 shift(random.nextFloat(), random.nextFloat());
+
+	int32_t count = 0;
+	for (int32_t i = 0; i < candidateCount; ++i)
+	{
+		const Vector2 ruv = Quasirandom::hammersley((uint32_t)i, (uint32_t)candidateCount, shift);
+
+		const float px = center.x() + (ruv.x * 2.0f - 1.0f) * clusterSize;
+		const float pz = center.z() + (ruv.y * 2.0f - 1.0f) * clusterSize;
+
+		const float density = heightfield->getWorldAttributeDensity(px, pz, attribute);
+
+		// Draw every random value unconditionally, thus the stream stay in lockstep
+		// between the counting and the writing pass.
+		const float accept = random.nextFloat();
+		const float rotation = random.nextFloat();
+		const float size = random.nextFloat();
+		const float variation = random.nextFloat();
+
+		if (accept >= density)
+			continue;
+
+		if (outBlades != nullptr && count < maxBlades)
+		{
+			BladeData& bd = outBlades[count];
+			bd.positionX = px;
+			bd.positionZ = pz;
+			bd.rotation = rotation * TWO_PI;
+			bd.dummy1 = 0.0f;
+			// Blades shrink as the density fade out, thus a thinned out region also
+			// read as shorter grass instead of only fewer blades.
+			bd.scale = scale * (0.5f + 0.5f * density) * (0.5f + 0.5f * size);
+			bd.random = variation;
+			bd.dummy2 = 0.0f;
+			bd.dummy3 = 0.0f;
+		}
+
+		++count;
+	}
+
+	return count;
 }
 
 }
@@ -221,6 +307,12 @@ bool GrassComponent::updateBladeBuffer()
 	if (!m_bladesCount)
 		return true;
 
+	auto terrainComponent = m_owner->getComponent< TerrainComponent >();
+	if (!terrainComponent)
+		return false;
+
+	const hf::Heightfield* heightfield = terrainComponent->getTerrain()->getHeightfield();
+
 	m_bladeBuffer = m_renderSystem->createBuffer(render::BufferUsage::BuStructured, m_bladesCount * sizeof(BladeData), false, T_FILE_LINE_W);
 	if (!m_bladeBuffer)
 		return false;
@@ -234,27 +326,20 @@ bool GrassComponent::updateBladeBuffer()
 
 	for (const Cluster& cluster : m_clusters)
 	{
-		RandomGeometry random(int32_t(cluster.center.x() * 919.0f + cluster.center.z() * 463.0f));
-		for (int32_t j = cluster.from; j < cluster.to; ++j)
-		{
-			const Vector2 ruv = Quasirandom::hammersley(j - cluster.from, cluster.to - cluster.from, random);
+		const auto& grass = m_layerData.m_grass[cluster.grass];
+		const int32_t count = scatterCluster(
+			heightfield,
+			cluster.center,
+			m_clusterSize,
+			grass.attribute,
+			grass.density,
+			grass.scale,
+			bladeData + cluster.from,
+			cluster.to - cluster.from);
 
-			const float dx = (ruv.x * 2.2f - 1.1f) * m_clusterSize;
-			const float dz = (ruv.y * 2.2f - 1.1f) * m_clusterSize;
-
-			const float px = cluster.center.x() + dx;
-			const float pz = cluster.center.z() + dz;
-
-			auto& bd = bladeData[j];
-			bd.positionX = px;
-			bd.positionZ = pz;
-			bd.rotation = random.nextFloat() * TWO_PI;
-			bd.dummy1 = 0.0f;
-			bd.scale = cluster.scale * (random.nextFloat() * 0.5f + 0.5f);
-			bd.random = random.nextFloat();
-			bd.dummy2 = 0.0f;
-			bd.dummy3 = 0.0f;
-		}
+		// Should only differ if the heightfield changed since updatePatches; the
+		// cluster then render a few blades of stale data until it's rebuilt.
+		T_ASSERT(count == cluster.to - cluster.from);
 	}
 
 	m_bladeBuffer->unlock();
@@ -392,81 +477,54 @@ void GrassComponent::updatePatches()
 	if (!terrainComponent)
 		return;
 
-	const resource::Proxy< Terrain >& terrain = terrainComponent->getTerrain();
-	const resource::Proxy< hf::Heightfield >& heightfield = terrain->getHeightfield();
-
-	// Get set of materials which have grass.
-	StaticVector< uint8_t, 16 > um;
-	um.resize(16, 0);
-
-	uint8_t maxMaterialIndex = 0;
-	for (const auto& grass : m_layerData.m_grass)
-		um[grass.attribute] = ++maxMaterialIndex;
+	const hf::Heightfield* heightfield = terrainComponent->getTerrain()->getHeightfield();
 
 	const int32_t size = heightfield->getSize();
 	const Vector4 extentPerGrid = heightfield->getWorldExtent() / Scalar(float(size));
 
-	m_clusterSize = (16.0f / 2.0f) * max< float >(extentPerGrid.x(), extentPerGrid.z());
+	m_clusterSize = (c_clusterGridSize / 2.0f) * max< float >(extentPerGrid.x(), extentPerGrid.z());
 
-	// Create clusters.
-	RandomGeometry random;
-	for (int32_t z = 0; z < size; z += 16)
+	// Create clusters; a cluster only determine which blades are scattered and culled
+	// together, the density within it follow the attribute channel per blade.
+	for (int32_t z = 0; z < size; z += c_clusterGridSize)
 	{
-		for (int32_t x = 0; x < size; x += 16)
+		for (int32_t x = 0; x < size; x += c_clusterGridSize)
 		{
-			StaticVector< int32_t, 16 > cm;
-			cm.resize(16, 0);
-
-			int32_t totalDensity = 0;
-			for (int32_t cz = 0; cz < 16; ++cz)
-			{
-				for (int32_t cx = 0; cx < 16; ++cx)
-				{
-					const uint8_t attribute = heightfield->getGridAttribute(x + cx, z + cz);
-					const uint8_t index = um[attribute];
-					if (index > 0)
-					{
-						cm[index - 1]++;
-						totalDensity++;
-					}
-				}
-			}
-			if (totalDensity <= 0)
-				continue;
-
 			float wx, wz;
-			heightfield->gridToWorld(x + 8, z + 8, wx, wz);
+			heightfield->gridToWorld(x + c_clusterGridSize / 2, z + c_clusterGridSize / 2, wx, wz);
 
 			const float wy = heightfield->getWorldHeight(wx, wz);
+			const Vector4 center(wx, wy, wz, 1.0f);
 
-			for (uint32_t i = 0; i < maxMaterialIndex; ++i)
+			for (uint32_t i = 0; i < m_layerData.m_grass.size(); ++i)
 			{
-				if (cm[i] <= 0)
+				const auto& grass = m_layerData.m_grass[i];
+
+				// Density is filtered, thus a one cell border is included since a cluster
+				// next to a painted region also carry a fringe of grass.
+				if (!anyAttributeDensity(heightfield, x - 1, z - 1, c_clusterGridSize + 2, grass.attribute))
 					continue;
 
-				for (const auto& grass : m_layerData.m_grass)
-				{
-					if (um[grass.attribute] == i + 1)
-					{
-						const int32_t densityFactor = cm[i];
+				const int32_t density = scatterCluster(
+					heightfield,
+					center,
+					m_clusterSize,
+					grass.attribute,
+					grass.density,
+					grass.scale,
+					nullptr,
+					0);
+				if (density <= 0)
+					continue;
 
-						const int32_t density = (grass.density * densityFactor) / (16 * 16);
-						if (density <= 4)
-							continue;
+				Cluster c;
+				c.center = center;
+				c.grass = (int32_t)i;
+				c.from = m_bladesCount;
+				c.to = c.from + density;
+				m_clusters.push_back(c);
 
-						const int32_t from = m_bladesCount;
-						const int32_t to = from + density;
-
-						Cluster c;
-						c.center = Vector4(wx, wy, wz, 1.0f);
-						c.scale = grass.scale * (0.5f + 0.5f * densityFactor / (16.0f * 16.0f));
-						c.from = from;
-						c.to = to;
-						m_clusters.push_back(c);
-
-						m_bladesCount = to;
-					}
-				}
+				m_bladesCount = c.to;
 			}
 		}
 	}

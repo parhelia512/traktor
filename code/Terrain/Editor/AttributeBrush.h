@@ -39,7 +39,7 @@ private:
 	int32_t m_radius;
 	const IFallOff* m_fallOff;
 	float m_strength;
-	int32_t m_attribute;
+	uint8_t m_attribute;
 };
 
 }

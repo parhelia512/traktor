@@ -365,14 +365,6 @@ void UndergrowthComponent::updatePatches()
 	const resource::Proxy< Terrain >& terrain = terrainComponent->getTerrain();
 	const resource::Proxy< hf::Heightfield >& heightfield = terrain->getHeightfield();
 
-	// Get set of materials which have undergrowth.
-	StaticVector< uint8_t, 16 > um;
-	um.resize(16, 0);
-
-	uint8_t maxMaterialIndex = 0;
-	for (const auto& plant : m_layerData.m_plants)
-		um[plant.attribute] = ++maxMaterialIndex;
-
 	const int32_t size = heightfield->getSize();
 	const Vector4 extentPerGrid = heightfield->getWorldExtent() / Scalar(float(size));
 
@@ -384,60 +376,41 @@ void UndergrowthComponent::updatePatches()
 	{
 		for (int32_t x = 0; x < size; x += 16)
 		{
-			StaticVector< int32_t, 16 > cm;
-			cm.resize(16, 0);
-
-			int32_t totalDensity = 0;
-			for (int32_t cz = 0; cz < 16; ++cz)
-			{
-				for (int32_t cx = 0; cx < 16; ++cx)
-				{
-					const uint8_t attribute = heightfield->getGridAttribute(x + cx, z + cz);
-					const uint8_t index = um[attribute];
-					if (index > 0)
-					{
-						cm[index - 1]++;
-						totalDensity++;
-					}
-				}
-			}
-			if (totalDensity <= 0)
-				continue;
-
 			float wx, wz;
 			heightfield->gridToWorld(x + 8, z + 8, wx, wz);
 
 			const float wy = heightfield->getWorldHeight(wx, wz);
 
-			for (uint32_t i = 0; i < maxMaterialIndex; ++i)
+			for (const auto& plant : m_layerData.m_plants)
 			{
-				if (cm[i] <= 0)
+				// Accumulated attribute density across the cluster, 0 to 16 * 16 as a
+				// fully painted cluster contribute full density from every cell.
+				int32_t densityFactor = 0;
+				for (int32_t cz = 0; cz < 16; ++cz)
+				{
+					for (int32_t cx = 0; cx < 16; ++cx)
+						densityFactor += heightfield->getGridAttributeDensity(x + cx, z + cz, plant.attribute);
+				}
+				densityFactor /= 255;
+				if (densityFactor <= 0)
 					continue;
 
-				for (const auto& plant : m_layerData.m_plants)
-				{
-					if (um[plant.attribute] == i + 1)
-					{
-						const int32_t densityFactor = cm[i];
+				const int32_t density = (plant.density * densityFactor) / (16 * 16);
+				if (density <= 4)
+					continue;
 
-						const int32_t density = (plant.density * densityFactor) / (16 * 16);
-						if (density <= 4)
-							continue;
+				const int32_t from = m_plantsCount;
+				const int32_t to = from + density;
 
-						const int32_t from = m_plantsCount;
-						const int32_t to = from + density;
+				Cluster c;
+				c.center = Vector4(wx, wy, wz, 1.0f);
+				c.plant = plant.plant;
+				c.plantScale = plant.scale * (0.5f + 0.5f * densityFactor / (16.0f * 16.0f));
+				c.from = from;
+				c.to = to;
+				m_clusters.push_back(c);
 
-						Cluster c;
-						c.center = Vector4(wx, wy, wz, 1.0f);
-						c.plant = plant.plant;
-						c.plantScale = plant.scale * (0.5f + 0.5f * densityFactor / (16.0f * 16.0f));
-						c.from = from;
-						c.to = to;
-						m_clusters.push_back(c);
-
-						m_plantsCount = to;
-					}
-				}
+				m_plantsCount = to;
 			}
 		}
 	}

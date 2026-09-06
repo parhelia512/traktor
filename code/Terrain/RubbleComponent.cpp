@@ -245,14 +245,6 @@ void RubbleComponent::updatePatches()
 	const auto& terrain = terrainComponent->getTerrain();
 	const auto& heightfield = terrain->getHeightfield();
 
-	// Get set of materials which have undergrowth.
-	StaticVector< uint8_t, 16 > um;
-	um.resize(16, 0);
-
-	uint8_t maxMaterialIndex = 0;
-	for (const auto& rubble : m_rubble)
-		um[rubble.attribute] = ++maxMaterialIndex;
-
 	const int32_t size = heightfield->getSize();
 	const Vector4 extentPerGrid = heightfield->getWorldExtent() / Scalar(float(size));
 
@@ -264,64 +256,46 @@ void RubbleComponent::updatePatches()
 	{
 		for (int32_t x = 0; x < size; x += 16)
 		{
-			StaticVector< int32_t, 16 > cm;
-			cm.resize(16, 0);
-
-			int32_t totalDensity = 0;
-			for (int32_t cz = 0; cz < 16; ++cz)
-			{
-				for (int32_t cx = 0; cx < 16; ++cx)
-				{
-					const uint8_t attribute = heightfield->getGridAttribute(x + cx, z + cz);
-					const uint8_t index = um[attribute];
-					if (index > 0)
-					{
-						cm[index - 1]++;
-						totalDensity++;
-					}
-				}
-			}
-			if (totalDensity <= 0)
-				continue;
-
 			float wx, wz;
 			heightfield->gridToWorld(x + 8, z + 8, wx, wz);
 			const float wy = heightfield->getWorldHeight(wx, wz);
 
-			for (uint32_t i = 0; i < maxMaterialIndex; ++i)
+			for (auto& rubble : m_rubble)
 			{
-				if (cm[i] <= 0)
+				// Accumulated attribute density across the cluster, 0 to 16 * 16 as a
+				// fully painted cluster contribute full density from every cell.
+				int32_t densityFactor = 0;
+				for (int32_t cz = 0; cz < 16; ++cz)
+				{
+					for (int32_t cx = 0; cx < 16; ++cx)
+						densityFactor += heightfield->getGridAttributeDensity(x + cx, z + cz, rubble.attribute);
+				}
+				densityFactor /= 255;
+				if (densityFactor <= 0)
 					continue;
 
-				for (auto& rubble : m_rubble)
+				const int32_t density = (rubble.density * densityFactor) / (16 * 16);
+				if (density <= 4)
+					continue;
+
+				const int32_t from = (int32_t)m_instances.size();
+				for (int32_t k = 0; k < density; ++k)
 				{
-					if (um[rubble.attribute] != i + 1)
-						continue;
-
-					const int32_t densityFactor = cm[i];
-					const int32_t density = (rubble.density * densityFactor) / (16 * 16);
-					if (density <= 4)
-						continue;
-
-					const int32_t from = (int32_t)m_instances.size();
-					for (int32_t k = 0; k < density; ++k)
-					{
-						Instance& instance = m_instances.push_back();
-						instance.position = Vector4::zero();
-						instance.rotation = Quaternion::identity();
-						instance.scale = 0.0f;
-					}
-					const int32_t to = (int32_t)m_instances.size();
-
-					Cluster& c = m_clusters.push_back();
-					c.rubbleDef = &rubble;
-					c.center = Vector4(wx, wy, wz, 1.0f);
-					c.distance = std::numeric_limits< float >::max();
-					c.seed = (int32_t)random.next();
-					c.from = from;
-					c.to = to;
-					c.visible = false;
+					Instance& instance = m_instances.push_back();
+					instance.position = Vector4::zero();
+					instance.rotation = Quaternion::identity();
+					instance.scale = 0.0f;
 				}
+				const int32_t to = (int32_t)m_instances.size();
+
+				Cluster& c = m_clusters.push_back();
+				c.rubbleDef = &rubble;
+				c.center = Vector4(wx, wy, wz, 1.0f);
+				c.distance = std::numeric_limits< float >::max();
+				c.seed = (int32_t)random.next();
+				c.from = from;
+				c.to = to;
+				c.visible = false;
 			}
 		}
 	}
